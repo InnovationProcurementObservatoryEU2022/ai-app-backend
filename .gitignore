@@ -1,0 +1,7 @@
+env
+__pycache__
+.vscode
+*.ipynb
+data
+data_old
+database_login.py
