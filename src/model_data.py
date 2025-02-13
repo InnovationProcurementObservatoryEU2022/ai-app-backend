@@ -3,6 +3,8 @@ import pickle
 
 
 class LanguageModelData:
+    """Class that stores required objects for model training/inference on a specific language."""
+
     def __init__(self, classifier, vectorizer, stop_words, deleted_words, tender_data):
         self.classifier = classifier
         self.vectorizer = vectorizer
@@ -12,6 +14,8 @@ class LanguageModelData:
 
 
 class TenderData:
+    """Class that stores data connected to individual tenders. Used for frontend visualization."""
+
     def __init__(self, features, predictions, predict_probas, labels, tender_ids):
         self.features = features
         self.predictions = predictions
@@ -21,6 +25,8 @@ class TenderData:
 
 
 class CountryModelData:
+    """Helper class for mapping countries to their respective model trained on individual language"""
+
     @classmethod
     def load(cls, country, save_start_path="./data"):
         with open(os.path.join(save_start_path, country + ".pickle"), "rb") as f:
@@ -33,6 +39,7 @@ class CountryModelData:
         self.save_start_path = save_start_path
 
     def save(self):
+        """Save this object to a file."""
         with open(
             os.path.join(self.save_start_path, self.country + ".pickle"), "wb"
         ) as f:

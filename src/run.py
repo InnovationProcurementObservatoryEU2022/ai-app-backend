@@ -51,6 +51,11 @@ class CountryData(Resource):
     @api.response(200, "Success", [countries_model])
     @api.response(400, "Error")
     def get(self):
+        """Get descriptives for all countries (number of examples, number of (non)innovative tenders, etc.)
+
+        Returns:
+            Dict: Descriptives for a country used for frontend
+        """
         try:
             return model.get_countries_data()
         except Exception as e:
@@ -59,9 +64,15 @@ class CountryData(Resource):
 
 @dgcnect_ns.route("/country_details/<string:country2alpha>")
 class CountryDetails(Resource):
-    # @api.response(200, "Success", [country_details_model])
-    # @api.response(400, "Error")
-    def get(self, country2alpha):
+    def get(self, country2alpha: str):
+        """Fetch stats for a single country
+
+        Args:
+            country2alpha (str): Country to fetch stats for
+
+        Returns:
+            Dict: Fetched stats
+        """
         try:
             return model.get_country_data(country=country2alpha)
         except Exception as e:
@@ -70,9 +81,14 @@ class CountryDetails(Resource):
 
 @dgcnect_ns.route("/global_explanation/<string:country2alpha>")
 class GlobalExplanation(Resource):
-    # @api.response(200, "Success", [country_details_model])
-    # @api.response(400, "Error")
-    def get(self, country2alpha):
+    def get(self, country2alpha: str):
+        """Get global importance scores for a country
+
+        Args:
+            country2alpha (str): Country to fetch the global data for
+
+        Returns:
+            Dict: Global data"""
         try:
             return model.get_global_data(country=country2alpha)
         except Exception as e:
@@ -81,10 +97,16 @@ class GlobalExplanation(Resource):
 
 @dgcnect_ns.route("/tender_details/<string:country2alpha>/<string:tender_id>")
 class CountryDetails(Resource):
-    # @api.response(200, "Success", [country_details_model])
-    # @api.response(400, "Error")
-    def get(self, country2alpha, tender_id):
-        print(country2alpha, tender_id)
+    def get(self, country2alpha: str, tender_id: str):
+        """Get data used for single tender visualization. Includes per-token importances,
+        prediction information and an image of the importance plot for that tender.
+
+        Args:
+            country (str): Country of the tender.
+            tender_id (str): Tender ID
+
+        Returns:
+            Dict: Data used for single tender visualization."""
         try:
             return model.get_tender_data(country=country2alpha, tender_id=tender_id)
         except Exception as e:
@@ -93,12 +115,15 @@ class CountryDetails(Resource):
 
 @dgcnect_ns.route("/retrain_country/<string:country2alpha>")
 class RetrainCountry(Resource):
-    # @api.response(200, "Success", [country_details_model])
-    # @api.response(400, "Error")
     @api.expect(stop_words)
-    def post(self, country2alpha):
+    def post(self, country2alpha: str):
+        """Retrain the model for a particular country. Optionally disable tokens given by deleted_words,
+        and reenable disabled tokens via reenabled_words (these two parameters are connected to the global token importances)
+
+        Args:
+            country2alpha (str): Country to retrain
+            stop_words (StopWords): Words to remove and/or to reenable in the vocab"""
         data = request.get_json()
-        print(country2alpha, data)
         try:
             if "ReEnabledWords" not in data:
                 reenabled_words = []
@@ -116,56 +141,22 @@ class RetrainCountry(Resource):
 
 @dgcnect_ns.route("/annotate_tender/<string:country2alpha>/<string:tender_id>")
 class AnnotateTender(Resource):
-    # @api.response(200, "Success", [country_details_model])
-    # @api.response(400, "Error")
     @api.expect(annotation)
-    def post(self, country2alpha, tender_id):
+    def post(self, country2alpha: str, tender_id: str):
+        """Manually annotate a tender and save its label to the database
+
+        Args:
+            country (str): Country of the tender
+            tender_id (str): Tender ID
+            annotation (Annotation): Label (0 or 1) (non-innovative or innovative)
+        """
         data = request.get_json()
         annotation = data["Annotation"]
-        print(country2alpha, annotation)
         try:
             model.annotate_tender(country2alpha, tender_id, annotation)
-            print("run success")
-            # try:
             return 200, "Success"
-        # return model.retrain_country(country=country2alpha, stop_words=stop_words)
         except Exception as e:
             abort(400, str(e))
-
-
-"""@chatbot_ns.route("/query")
-class Query(Resource):
-    @api.response(200, "Success", predicted_intent)
-    @api.response(400, "Error")
-    @api.expect(question_model)
-    def post(self):
-        try:
-            data = request.get_json()
-            text = data["QuestionText"]
-            intent_id, similarity = model.query(text, 1)[0]
-            return {
-                "PredictedIntent": {"IntentID": intent_id, "Confidence": similarity}
-            }
-        except Exception as e:
-            abort(400, str(e))
-
-
-@chatbot_ns.route("/query/<int:top_k>")
-class QueryTopK(Resource):
-    @api.response(200, "Success", [predicted_intent])
-    @api.response(400, "Error")
-    @api.expect(question_model)
-    def post(self, top_k):
-        try:
-            data = request.get_json()
-            text = data["QuestionText"]
-            intent_sim_scores = model.query(text, top_k)
-            return [
-                {"PredictedIntent": {"IntentID": intent_id, "Confidence": similarity}}
-                for intent_id, similarity in intent_sim_scores
-            ]
-        except Exception as e:
-            abort(400, str(e))"""
 
 
 if __name__ == "__main__":

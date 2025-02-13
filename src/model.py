@@ -8,14 +8,15 @@ import io
 import psycopg2
 import trainer
 import pickle
-from database_login import DBNAME, USER, PASSWORD, HOST, PORT
+from database_login import DBNAME, USER, PASSWORD, HOST, PORT, TABLE_NAME
 import codecs
-from model_data import CountryModelData
+from model_data import CountryModelData, TenderData
 from config import NUM_WORDS
 from tqdm import tqdm
-from database_login import TABLE_NAME
+from typing import List, Tuple, Dict
 
 
+# 2-alpha code to country name
 alpha2name = {
     "UK": "United Kingdom",
     "DE": "Germany",
@@ -94,6 +95,8 @@ country2language = {
 
 
 class PostgresCountryModel:
+    """Class for handling postgres data fetching"""
+
     def __init__(self) -> None:
         print(f"Connecting to {TABLE_NAME}")
         self.connect_database()
@@ -103,13 +106,14 @@ class PostgresCountryModel:
 
         countries = [country[0] for country in countries]
         countries = list(filter(lambda country: country in country2language, countries))
-        # countries = ["HR", "BE", "BG", "HU", "PT", "LV", "NO"]
 
         print(f"Supported countries: {countries}")
 
         if not os.path.exists("data"):
             os.makedirs("data")
 
+        # check if models have already been trained for each country found in the database
+        # if not, train the models
         for country in countries:
             saved_path = os.path.join("data", f"{country}.pickle")
             if not os.path.exists(saved_path):
@@ -131,6 +135,7 @@ class PostgresCountryModel:
                     )
                     del country2language[country]
 
+        # load trained models
         country_model_data = {}
         countries = list(filter(lambda country: country in country2language, countries))
         for country in countries:
@@ -142,11 +147,13 @@ class PostgresCountryModel:
 
         self.detailed_country_data = {}
 
+        # calculate global token importance data for each country
         self.global_data = {}
         for country in self.country_model_data:
             self.calculate_global_data(country)
 
     def connect_database(self):
+        """Connect to a postgres database"""
         self.conn = psycopg2.connect(
             dbname=DBNAME,
             user=USER,
@@ -157,10 +164,17 @@ class PostgresCountryModel:
         self.cur = self.conn.cursor()
 
     def close_database_connection(self):
+        """Close a database connection"""
         self.cur.close()
         self.conn.close()
 
-    def update_predictions(self, tender_data, country):
+    def update_predictions(self, tender_data: TenderData, country: str):
+        """Update predictions in the database
+
+        Args:
+            tender_data (TenderData): tender data to update
+            country (str): country 2-alpha code
+        """
         self.connect_database()
         print("Updating predictions...")
         for tender_id, prediction, predict_probas in tqdm(
@@ -180,7 +194,20 @@ class PostgresCountryModel:
             self.conn.commit()
         self.close_database_connection()
 
-    def retrain_country(self, country, deleted_words=[], reenabled_words=[]):
+    def retrain_country(
+        self,
+        country: str,
+        deleted_words: List[str] = [],
+        reenabled_words: List[str] = [],
+    ):
+        """Retrain the model for a particular country. Optionally disable tokens given by deleted_words,
+        and reenable disabled tokens via reenabled_words (these two parameters are connected to the global token importances)
+
+        Args:
+            country (str): Country to retrain
+            deleted_words (List[str], optional): Words to remove from the vocab. Defaults to [].
+            reenabled_words (List[str], optional): Words to reenable in the vocab. Defaults to [].
+        """
         print(f"Processing country: {country}")
         country_dataset = self.fetch_dataset(country)
         language = country2language[country]
@@ -216,7 +243,15 @@ class PostgresCountryModel:
         self.update_predictions(tender_data, country)
         print()
 
-    def fetch_dataset(self, country):
+    def fetch_dataset(self, country: str) -> List:
+        """Fetch a dataset from the database to train a model.
+
+        Args:
+            country (str): Country dataset to fetch.
+
+        Returns:
+            List: Rows from the database (examples to use as training data)
+        """
         print("Fetching data...")
         self.connect_database()
         self.cur.execute(f"SELECT * FROM {TABLE_NAME} where country_iso='{country}'")
@@ -225,7 +260,16 @@ class PostgresCountryModel:
 
         return dataset
 
-    def fetch_tender(self, country, tender_id):
+    def fetch_tender(self, country: str, tender_id: str) -> List:
+        """Fetch a particular tender from the database.
+
+        Args:
+            country (str): Tender's country
+            tender_id (str): Tender ID
+
+        Returns:
+            List: Tender that was requested.
+        """
         self.connect_database()
         self.cur.execute(
             f"SELECT * FROM {TABLE_NAME} where country_iso='{country}' AND dgcnect_tender_id={tender_id}"
@@ -235,7 +279,17 @@ class PostgresCountryModel:
 
         return example[0]
 
-    def infer_model(self, country, example):
+    def infer_model(self, country: str, example: List) -> Tuple:
+        """Infer a country model on a fetched tender.
+
+        Args:
+            country (str): Country model to infer
+            example (List): Fetched tender
+
+        Returns:
+            Tuple: Returns tokens, lemmatized tokens, features, prediction index (innovative or not) and prediction probability
+            for frontend visualization
+        """
         language = country2language[country]
         country_model_data = self.country_model_data[country]
         language_model_data = country_model_data.language_to_model_data[language]
@@ -245,14 +299,20 @@ class PostgresCountryModel:
         features = language_model_data.vectorizer.transform(
             [" ".join(lemmatized_tokens)]
         )
-        # pred = language_model_data.classifier.predict(features)[0]
         pred_proba = language_model_data.classifier.predict_proba(features)[0]
         pred_index = pred_proba.argmax(-1)
         pred = pred_proba[pred_index]
 
         return tokens, lemmatized_tokens, features, pred_index, pred
 
-    def annotate_tender(self, country, tender_id, annotation):
+    def annotate_tender(self, country: str, tender_id: str, annotation: int):
+        """Manually annotate a tender and save its label to the database
+
+        Args:
+            country (_type_): Country of the tender
+            tender_id (_type_): Tender ID
+            annotation (_type_): Label (0 or 1) (non-innovative or innovative)
+        """
         self.connect_database()
         self.cur.execute(
             f"UPDATE {TABLE_NAME} SET innovation_label={annotation} WHERE country_iso='{country}' AND dgcnect_tender_id={tender_id}"
@@ -268,7 +328,12 @@ class PostgresCountryModel:
         country_model_data.save()
         print("annotated")
 
-    def get_countries_data(self):
+    def get_countries_data(self) -> Dict:
+        """Get descriptives for all countries (number of examples, number of (non)innovative tenders, etc.)
+
+        Returns:
+            Dict: Descriptives for a country used for frontend
+        """
         retval = []
         print(self.country_model_data.keys())
         for key in self.country_model_data.keys():
@@ -296,7 +361,15 @@ class PostgresCountryModel:
             )
         return retval
 
-    def calculate_details_for_country(self, country):
+    def calculate_details_for_country(self, country: str) -> Dict:
+        """Calculate the confusion matrix for a country, alongside unlabeled and labeled statistics (used for frontend)
+
+        Args:
+            country (str): Country to calculate stats for.
+
+        Returns:
+            Dict: Calculated statistics
+        """
         language = country2language[country]
         country_model_data = self.country_model_data[country]
         tender_data = country_model_data.language_to_model_data[language].tender_data
@@ -351,11 +424,26 @@ class PostgresCountryModel:
             "Details": selected_prediction_type_dict,
         }
 
-    def get_country_data(self, country):
+    def get_country_data(self, country: str) -> Dict:
+        """Fetch stats for a single country
+
+        Args:
+            country (str): Country to fetch stats for
+
+        Returns:
+            Dict: Fetched stats
+        """
         self.calculate_details_for_country(country=country)
         return self.detailed_country_data[country]
 
-    def calculate_global_data(self, country, n_words=200):
+    def calculate_global_data(self, country: str, n_words: int = 200):
+        """Calculate global importance data for a country
+
+        Args:
+            country (str): Country to calculate global importances for
+            n_words (int, optional): Number of words to calculate importances for. Defaults to 200.
+        """
+        # fetch the model
         score_key = []
         language = country2language[country]
         country_model_data = self.country_model_data[country]
@@ -364,11 +452,13 @@ class PostgresCountryModel:
         clf, vectorizer = language_model_data.classifier, language_model_data.vectorizer
         all_features, all_tender_ids = tender_data.features, tender_data.tender_ids
 
+        # store the scores for each token
         score_key = []
         for key, index in vectorizer.vocabulary_.items():
             score_key.append((key, clf.coef_[0][index], index))
         score_key = sorted(score_key, reverse=True, key=lambda k: k[1])
 
+        # get tenders with top scores for a particular token
         top_score_key_tenders = []
         for token, score, word_index in score_key[:n_words]:
             if score < 0:
@@ -379,6 +469,7 @@ class PostgresCountryModel:
             ]
             top_score_key_tenders.append((token, score, tender_id_appears))
 
+        # get tenders with bottom scores for a particular token
         bottom_score_key_tenders = []
         for token, score, word_index in score_key[-n_words:]:
             if score > 0:
@@ -396,15 +487,34 @@ class PostgresCountryModel:
             "DeletedWords": language_model_data.deleted_words,
         }
 
-    def get_global_data(self, country):
+    def get_global_data(self, country: str) -> Dict:
+        """Get global importance scores for a country
+
+        Args:
+            country (str): Country to fetch the global data for
+
+        Returns:
+            Dict: Global data
+        """
         return self.global_data[country]
 
-    def get_tender_data(self, country, tender_id):
+    def get_tender_data(self, country: str, tender_id: str) -> Dict:
+        """Get data used for single tender visualization. Includes per-token importances,
+        prediction information and an image of the importance plot for that tender.
+
+        Args:
+            country (str): Country of the tender.
+            tender_id (str): Tender ID
+
+        Returns:
+            Dict: Data used for single tender visualization.
+        """
+        # load the trained model
         language = country2language[country]
         country_model_data = self.country_model_data[country]
         language_model_data = country_model_data.language_to_model_data[language]
         clf, vectorizer = language_model_data.classifier, language_model_data.vectorizer
-
+        # fetch the requested tender
         example = self.fetch_tender(country, tender_id)
         (
             original_words,
@@ -413,25 +523,18 @@ class PostgresCountryModel:
             tender_prediction,
             tender_prediction_probability,
         ) = self.infer_model(country, example)
-
-        # preprocessed_str = vectorizer.build_preprocessor()(" ".join(original_words))
-        # original_words = vectorizer.build_tokenizer()(preprocessed_str)
-
-        # preprocessed_str = vectorizer.build_preprocessor()(" ".join(lemma_words))
-        # lemma_words = vectorizer.build_tokenizer()(preprocessed_str)
-
+        # preprocess original tender into tokens
         original_words = vectorizer.build_preprocessor()(
             " ".join(original_words)
         ).split(" ")
         lemma_words = vectorizer.build_preprocessor()(" ".join(lemma_words)).split(" ")
-
         tender_prediction = tender_prediction.tolist()
         tender_label = 2
         if example[5] is not None:
             tender_label = int(example[5])
+        # get scores for each token from the model, then sum them and map them to original words
         word_scores = features.multiply(clf.coef_[0]).tocsr()
         scored_words = []
-        # total_score = features.dot(clf.coef_[0])
         word_score = {}
         lemma_original = {}
         for i, (original_word, lemma_word) in enumerate(
@@ -452,7 +555,7 @@ class PostgresCountryModel:
             if original_word == "of" and score != 0:
                 print(original_word, score, lemma_word)
             scored_words.append([original_word, score])
-
+        # create a plot of the summed token importances
         fig, ax = plt.subplots()
         word_score = dict(sorted(word_score.items(), key=lambda k: k[1]))
         vis_words = []
@@ -464,14 +567,12 @@ class PostgresCountryModel:
         )
         ax.axvline(x=0, color="black", label="zero", linestyle="dashed")
 
+        # plot positive words first
         current_word_index = 0
-        top_keys = list(word_score.keys())  # [-NUM_WORDS:]
+        top_keys = list(word_score.keys())
         top_keys.reverse()
         positive_other_sum = 0.0
         for i, lemma_word in enumerate(top_keys):
-            # if word_score[lemma_word] == 0:
-            #    continue
-
             if i < NUM_WORDS and word_score[lemma_word] > 0:
                 ax.barh(
                     current_word_index,
@@ -506,13 +607,10 @@ class PostgresCountryModel:
             va="center",
         )
         current_word_index += 1
-
-        bot_keys = list(word_score.keys())  # [:NUM_WORDS]
+        # plot negative words
+        bot_keys = list(word_score.keys())
         negative_other_sum = 0.0
-        # bot_keys.reverse()
         for i, lemma_word in enumerate(bot_keys):
-            # if word_score[lemma_word] == 0:
-            #    continue
             if i < NUM_WORDS and word_score[lemma_word] < 0:
                 if current_sum > 0:
                     zero_to_pos = current_sum + word_score[lemma_word]
@@ -589,7 +687,7 @@ class PostgresCountryModel:
         )
         ax.invert_yaxis()
         fig.tight_layout()
-
+        # encode the image to png
         filename = uuid.uuid4()
         buf = io.BytesIO()
         plt.savefig(buf, format="png")
@@ -597,7 +695,7 @@ class PostgresCountryModel:
         byte_image = buf.read().hex()
         b64_image = codecs.encode(codecs.decode(byte_image, "hex"), "base64").decode()
         plt.close()
-
+        # return the object
         return {
             "WordScores": scored_words,
             "Plot": b64_image,

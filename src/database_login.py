@@ -1,0 +1,6 @@
+DBNAME: str = ""
+USER: str = ""
+PASSWORD: str = ""
+HOST: str = ""
+PORT: str = ""
+TABLE_NAME: str = ""
